@@ -1,0 +1,27 @@
+# keys: anyone adds their own
+.env
+.env.*
+!.env.example
+
+# GTFS static files: judges place the hackathon's copy here
+gtfs/**
+!gtfs/.gitkeep
+
+# raw and derived collection data (only needed for retraining)
+data/clean/**
+data/raw/**
+data/health/**
+data/arrivals/**
+!data/clean/.gitkeep
+!data/raw/.gitkeep
+!data/health/.gitkeep
+!data/arrivals/.gitkeep
+
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.vscode/
+.idea/
+.DS_Store
+*.log
