@@ -12,6 +12,7 @@ data/clean/**
 data/raw/**
 data/health/**
 data/arrivals/**
+data/analytics/**
 !data/clean/.gitkeep
 !data/raw/.gitkeep
 !data/health/.gitkeep
