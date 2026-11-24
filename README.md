@@ -2,7 +2,9 @@
 
 Prototype for the **Delhi Transport Hackathon, Problem Statement 1**: plan bus journeys in Delhi using real bus-location data, with travel-time estimates that use both history and live buses.
 
-Everything is built from **our own collected data** (the GTFS-realtime VehiclePositions feed, saved over several days) plus the GTFS static files and the live feed. No sample data from the hackathon is mixed in.
+> [!IMPORTANT]
+> Everything is built from **my own collected data** (the GTFS-realtime VehiclePositions feed, saved over several days using a collector script of my own `collector/otd_collector.py`) plus the GTFS static files and the live feed. No sample data from the hackathon (that provided october month data) is mixed in. So as a result, attempting to run scripts 
+in `build/` won't work.
 
 - Journey API: `GET /journeys?from=...&to=...&depart=...` returns options as JSON
 - Web screen: map with trip planner, live buses and a stop board
