@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delhi bus planner</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --paper: #f4f1ea;
+    --card: #fbfaf6;
+    --ink: #1e2522;
+    --muted: #68716b;
+    --line: #d9d5c9;
+    --green: #12654a;
+    --green-dark: #0d4b37;
+    --amber: #b86e12;
+    --red: #b3342b;
+    --blue: #2b5f9e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+
+  header {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--card);
+  }
+  header h1 { font-size: 16px; font-weight: 650; margin: 0; letter-spacing: 0.01em; }
+  header h1 span { font-weight: 400; color: var(--muted); margin-left: 8px; font-size: 13px; }
+  #livepill { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #livepill i { width: 8px; height: 8px; border-radius: 50%; background: #aaa; display: inline-block; }
+  #livepill.on i { background: var(--green); }
+  #livepill.warm i { background: var(--amber); }
+
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 420px 1fr; }
+  aside { border-right: 1px solid var(--line); overflow-y: auto; background: var(--paper); }
+  #map { height: 100%; min-height: 300px; background: #e7e3d8; }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; z-index: 2; }
+  .tabs button {
+    flex: 1; padding: 10px 0; border: 0; background: none; font: inherit; color: var(--muted);
+    cursor: pointer; border-bottom: 2px solid transparent;
+  }
+  .tabs button.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--green); }
+  .pane { padding: 14px 16px 24px; display: none; }
+  .pane.active { display: block; }
+
+  label.f { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
+  .row { display: flex; gap: 6px; }
+  input[type=text], input[type=time], select {
+    width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 5px;
+    background: #fff; font: inherit; color: var(--ink);
+  }
+  input:focus, select:focus { outline: 2px solid #9cc7b6; outline-offset: -1px; }
+  button.small {
+    padding: 0 10px; border: 1px solid var(--line); background: var(--card); border-radius: 5px;
+    font: inherit; color: var(--ink); cursor: pointer; white-space: nowrap;
+  }
+  button.small:hover { background: #efece3; }
+  button.small.on { background: var(--green); color: #fff; border-color: var(--green); }
+  .swap { text-align: right; margin: 4px 0 0; }
+  .swap button { border: 0; background: none; color: var(--green); cursor: pointer; font: inherit; padding: 2px 0; }
+  button.go {
+    margin-top: 14px; width: 100%; padding: 10px; border: 0; border-radius: 5px;
+    background: var(--green); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.go:hover { background: var(--green-dark); }
+  button.go:disabled { background: #8aa89d; cursor: default; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
+
+  #results { margin-top: 18px; }
+  .msg { color: var(--muted); padding: 10px 0; }
+  .msg.err { color: var(--red); }
+
+  .opt {
+    border: 1px solid var(--line); background: var(--card); border-radius: 6px;
+    padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+  }
+  .opt.sel { border-color: var(--green); box-shadow: inset 3px 0 0 var(--green); }
+  .opt-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .opt-time { font-size: 24px; font-weight: 650; line-height: 1; }
+  .opt-time small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+  .opt-sub { color: var(--muted); font-size: 13px; }
+  .tags { margin-left: auto; display: flex; gap: 5px; flex-wrap: wrap; }
+  .tag { font-size: 11.5px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); background: #fff; }
+  .tag.good { color: var(--green); border-color: #a9cbbd; }
+  .tag.mid { color: var(--amber); border-color: #e3c496; }
+  .tag.low { color: var(--red); border-color: #e0aaa5; }
+
+  .legs { margin: 10px 0 0; padding: 0; list-style: none; }
+  .leg { display: grid; grid-template-columns: minmax(58px, fit-content(96px)) 1fr; gap: 8px; padding: 6px 0; border-top: 1px dashed var(--line); }
+  .leg:first-child { border-top: 0; }
+  .leg.walk { color: var(--muted); font-size: 13px; }
+  .badge {
+    display: inline-block; box-sizing: border-box; min-width: 54px; max-width: 96px; text-align: center;
+    padding: 3px 7px; border-radius: 4px; background: var(--green); color: #fff; font-weight: 600;
+    font-size: 12.5px; letter-spacing: 0.02em; line-height: 1.15; height: fit-content;
+    white-space: normal; overflow-wrap: anywhere;
+  }
+  .badge .dir { display: block; font-size: 9.5px; font-weight: 600; letter-spacing: 0.08em; opacity: .85; }
+  .veh { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--ink); }
+  .leg .route { font-weight: 600; }
+  .leg .meta { color: var(--muted); font-size: 12.5px; }
+  .live { margin-top: 5px; font-size: 12.5px; }
+  .live b { color: var(--green); font-weight: 650; }
+  .live .none { color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }
+  .chip { border: 1px solid #a9cbbd; background: #eef6f2; color: var(--green-dark); border-radius: 3px; padding: 1px 6px; font-size: 12px; }
+  .chip.stand { border-color: #e3c496; background: #fbf3e4; color: var(--amber); }
+
+  .board-row { display: grid; grid-template-columns: minmax(58px, fit-content(96px)) 1fr auto; gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); align-items: center; }
+  .board-row:first-child { border-top: 0; }
+  .board-row .eta { font-size: 18px; font-weight: 650; text-align: right; }
+  .board-row .eta small { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .board-row .desc { font-size: 13px; }
+  .board-row .meta { color: var(--muted); font-size: 12.5px; }
+  .foot { padding: 14px 16px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
+
+  .pin {
+    width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; color: #fff; font-weight: 700;
+    font-size: 12px; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.35);
+  }
+  .busmark {
+    background: var(--ink); color: #fff; font-size: 11px; font-weight: 650; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid #fff; white-space: nowrap; width: auto !important; height: auto !important;
+  }
+
+  @media (max-width: 820px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 44vh auto; }
+    #map { order: -1; }
+    aside { border-right: 0; border-top: 1px solid var(--line); }
+    header h1 span { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Delhi bus planner <span>times learned from real bus data</span></h1>
+  <div id="livepill"><i></i><span>checking live feed</span></div>
+</header>
+
+<main>
+  <aside>
+    <div class="tabs">
+      <button id="tab-plan" class="active">Plan a trip</button>
+      <button id="tab-board">Stop board</button>
+    </div>
+
+    <section id="pane-plan" class="pane active">
+      <label class="f" for="from">From</label>
+      <div class="row">
+        <input id="from" type="text" list="dl-from" autocomplete="off" placeholder="Stop name, or lat, lon">
+        <button class="small" id="pick-from" title="Then click the map">On map</button>
+      </div>
+      <datalist id="dl-from"></datalist>
+
+      <div class="swap"><button id="swap">Swap</button></div>
+
+      <label class="f" for="to" style="margin-top:0">To</label>
+      <div class="row">
+        <input id="to" type="text" list="dl-to" autocomplete="off" placeholder="Stop name, or lat, lon">
+        <button class="small" id="pick-to" title="Then click the map">On map</button>
+      </div>
+      <datalist id="dl-to"></datalist>
+
+      <label class="f">Leave</label>
+      <div class="row">
+        <select id="when" style="max-width:130px">
+          <option value="now">Now</option>
+          <option value="at">At time</option>
+        </select>
+        <input id="time" type="time" value="09:30" style="display:none">
+      </div>
+
+      <button class="go" id="go">Find buses</button>
+      <p class="hint">Tip: click the map to drop the start, then the destination. Drag a pin to adjust it.</p>
+
+      <div id="results"></div>
+    </section>
+
+    <section id="pane-board" class="pane">
+      <label class="f" for="bstop">Bus stop</label>
+      <input id="bstop" type="text" list="dl-b" autocomplete="off" placeholder="Start typing a stop name">
+      <datalist id="dl-b"></datalist>
+      <p class="hint">Buses on their way to this stop, with live arrival times. Updates every 15 seconds.</p>
+      <div id="board" style="margin-top:12px"></div>
+    </section>
+
+    <div class="foot" id="foot"></div>
+  </aside>
+
+  <div id="map"></div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+
+// small DOM helper: text is always inserted as text, never as HTML
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return e;
+}
+
+const BUS_COLORS = ["#12654a", "#a4531a", "#2b5f9e", "#7a3b8c"];
+let LIVE_ON = false;
+
+// ---------------------------------------------------------------- map
+const map = L.map("map").setView([28.6139, 77.2090], 11);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+const drawLayer = L.layerGroup().addTo(map);
+const busLayer = L.layerGroup().addTo(map);
+
+const pins = { from: null, to: null };
+const pinMarkers = { from: null, to: null };
+const PIN_COLOR = { from: "#12654a", to: "#b3342b" };
+let pickTarget = null;
+
+function pinIcon(which) {
+  return L.divIcon({
+    className: "", iconSize: [22, 22], iconAnchor: [11, 11],
+    html: `<div class="pin" style="background:${PIN_COLOR[which]}">${which === "from" ? "A" : "B"}</div>`,
+  });
+}
+
+function setPoint(which, lat, lon, label) {
+  pins[which] = { lat, lon, label };
+  $("#" + which).value = label;
+  if (pinMarkers[which]) pinMarkers[which].setLatLng([lat, lon]);
+  else {
+    const m = L.marker([lat, lon], { icon: pinIcon(which), draggable: true }).addTo(map);
+    m.on("dragend", () => {
+      const p = m.getLatLng();
+      setPoint(which, +p.lat.toFixed(5), +p.lng.toFixed(5), `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`);
+    });
+    pinMarkers[which] = m;
+  }
+}
+
+function setPick(which) {
+  pickTarget = pickTarget === which ? null : which;
+  $("#pick-from").classList.toggle("on", pickTarget === "from");
+  $("#pick-to").classList.toggle("on", pickTarget === "to");
+  map.getContainer().style.cursor = pickTarget ? "crosshair" : "";
+}
+
+map.on("click", (e) => {
+  if ($("#pane-board").classList.contains("active")) return;
+  const lat = +e.latlng.lat.toFixed(5), lon = +e.latlng.lng.toFixed(5);
+  const which = pickTarget || (!pins.from ? "from" : "to");
+  setPoint(which, lat, lon, `${lat}, ${lon}`);
+  if (pickTarget) setPick(null);
+});
+$("#pick-from").onclick = () => setPick("from");
+$("#pick-to").onclick = () => setPick("to");
+
+// ---------------------------------------------------------------- stop search
+const known = {}; // "Name [id]" -> stop
+let timers = {};
+function wireSearch(inputId, listId, onPick) {
+  const input = $("#" + inputId), list = $("#" + listId);
+  input.addEventListener("input", () => {
+    const v = input.value.trim();
+    if (known[v]) { onPick(known[v]); return; }
+    clearTimeout(timers[inputId]);
+    if (v.length < 2 || /^[\d\s.,-]+$/.test(v)) return;
+    timers[inputId] = setTimeout(async () => {
+      try {
+        const data = await (await fetch("/stops?limit=10&q=" + encodeURIComponent(v))).json();
+        list.replaceChildren();
+        for (const s of data) {
+          const label = `${s.name} [${s.stop_id}]`;
+          known[label] = s;
+          list.append(h("option", { value: label }));
+        }
+      } catch (e) { /* suggestions are optional */ }
+    }, 220);
+  });
+}
+wireSearch("from", "dl-from", (s) => { setPoint("from", s.lat, s.lon, `${s.name} [${s.stop_id}]`); map.panTo([s.lat, s.lon]); });
+wireSearch("to", "dl-to", (s) => { setPoint("to", s.lat, s.lon, `${s.name} [${s.stop_id}]`); map.panTo([s.lat, s.lon]); });
+
+async function resolve(which) {
+  const v = $("#" + which).value.trim();
+  if (!v) return false;
+  if (known[v]) { setPoint(which, known[v].lat, known[v].lon, v); return true; }
+  const m = v.match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
+  if (m) { setPoint(which, +m[1], +m[2], v); return true; }
+  if (pins[which] && pins[which].label === v) return true;
+  const data = await (await fetch("/stops?limit=1&q=" + encodeURIComponent(v))).json();
+  if (data.length) { const s = data[0]; setPoint(which, s.lat, s.lon, `${s.name} [${s.stop_id}]`); return true; }
+  return false;
+}
+
+$("#swap").onclick = () => {
+  const a = pins.from, b = pins.to;
+  if (a) setPoint("to", a.lat, a.lon, a.label);
+  if (b) setPoint("from", b.lat, b.lon, b.label);
+  if (!b) { $("#from").value = ""; pins.from = null; if (pinMarkers.from) { map.removeLayer(pinMarkers.from); pinMarkers.from = null; } }
+};
+$("#when").onchange = () => { $("#time").style.display = $("#when").value === "at" ? "" : "none"; };
+
+// ---------------------------------------------------------------- planning
+let lastData = null, selected = 0;
+
+function routeBadge(route, color) {
+  const m = /^(.*?)[\s_-]*(UP|DOWN)$/i.exec(route || "");
+  const kids = m && m[1] ? [m[1], h("span", { class: "dir" }, m[2].toUpperCase())] : [route];
+  return h("span", { class: "badge", title: route, style: color ? `background:${color}` : "" }, kids);
+}
+
+function esc(t) { return String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function vehText(b) { return b && b.vehicle ? b.vehicle : ""; }
+
+function minutesText(m) { return m < 0.5 ? "arriving" : `${Math.round(m)} min`; }
+
+function liveLine(leg) {
+  if (!LIVE_ON || !leg.live_buses) return null;
+  if (!leg.live_buses.length) return h("div", { class: "live" }, h("span", { class: "none" }, `No live ${leg.route} bus found heading to this stop right now`));
+  const first = leg.live_buses[0];
+  return h("div", { class: "live" },
+    h("span", {}, "Live: "), h("b", {}, `${leg.route} ${first.eta_min < 0.5 ? "arriving now" : "in " + minutesText(first.eta_min)}`),
+    h("span", { class: "meta" }, ` (${first.stops_away} stop${first.stops_away === 1 ? "" : "s"} away`),
+    h("span", { class: "meta" }, first.eta_source === "model" ? ", AI ETA" : ", history ETA"),
+    first.vehicle ? h("span", { class: "meta" }, " · ") : null,
+    first.vehicle ? h("span", { class: "veh", title: "vehicle id" }, first.vehicle) : null,
+    h("span", { class: "meta" }, ")"),
+    leg.live_buses.length > 1 ? h("div", { class: "chips" },
+      leg.live_buses.slice(1).map((b) => h("span", { class: "chip" + (b.standing ? " stand" : ""), title: vehText(b) }, minutesText(b.eta_min) + (b.vehicle ? " · " + b.vehicle : "")))) : null);
+}
+
+function optionCard(opt, i, live) {
+  const conf = { high: "good", medium: "mid", low: "low" }[opt.confidence] || "";
+  const tags = [
+    h("span", { class: `tag ${conf}`, title: `${Math.round(opt.data_share * 100)}% of the ride time comes from collected data` }, `${opt.confidence} confidence`),
+  ];
+  if (live && live.applied) tags.push(h("span", { class: "tag good", title: "Ride times scaled by current traffic" }, `traffic x${live.network_factor}`));
+  const legs = opt.legs.map((leg) => {
+    if (leg.type === "walk") {
+      return h("li", { class: "leg walk" }, h("span", {}, "Walk"),
+        h("span", {}, `${Math.max(1, Math.round(leg.minutes))} min ${leg.what.replace("walk ", "")}${leg.to && leg.what !== "walk to destination" ? ": " + leg.to : ""}`));
+    }
+    return h("li", { class: "leg" },
+      routeBadge(leg.route, BUS_COLORS[opt.legs.filter((l) => l.type === "bus").indexOf(leg) % BUS_COLORS.length]),
+      h("div", {},
+        h("div", { class: "route" }, `${leg.from} → ${leg.to}`),
+        h("div", { class: "meta" }, `${leg.stops} stops · ride about ${Math.round(leg.ride_min)} min · wait about ${Math.round(leg.wait_min)} min ${leg.wait_source === "live" ? "(next live bus" + (leg.next_vehicle ? " " + leg.next_vehicle : "") + ")" : "(timetable average)"}`),
+        leg.description ? h("div", { class: "meta" }, leg.description) : null,
+        liveLine(leg)));
+  });
+  return h("div", { class: "opt" + (i === selected ? " sel" : ""), onclick: () => selectOption(i) },
+    h("div", { class: "opt-head" },
+      h("span", { class: "opt-time num" }, String(Math.round(opt.total_min)), h("small", {}, "min")),
+      h("span", { class: "opt-sub num" }, `arrive ${opt.arrive} · ${opt.transfers === 0 ? "direct" : opt.transfers + " change" + (opt.transfers > 1 ? "s" : "")}`),
+      h("span", { class: "tags" }, tags)),
+    h("ul", { class: "legs" }, legs));
+}
+
+function renderResults() {
+  const box = $("#results");
+  box.replaceChildren();
+  const d = lastData;
+  if (!d.options.length) {
+    box.append(h("div", { class: "msg" }, "No bus route found between these points within 2 changes. Try moving a pin closer to a main road, or another time of day."));
+    return;
+  }
+  box.append(h("div", { class: "hint", style: "margin:0 0 8px" }, `${d.options.length} option${d.options.length > 1 ? "s" : ""} · leaving ${d.depart} · ${d.bucket.replace("_", " ")} traffic pattern`));
+  d.options.forEach((o, i) => box.append(optionCard(o, i, d.live)));
+  if (d.live && !d.live.applied && d.live.reason && LIVE_ON) box.append(h("div", { class: "hint" }, `Live traffic not used: ${d.live.reason}.`));
+}
+
+function selectOption(i) {
+  selected = i;
+  renderResults();
+  drawOption(lastData.options[i]);
+}
+
+function drawOption(opt) {
+  drawLayer.clearLayers();
+  busLayer.clearLayers();
+  const bounds = [];
+  let bi = 0;
+  for (const leg of opt.legs) {
+    const pts = leg.path || [];
+    pts.forEach((p) => bounds.push(p));
+    if (leg.type === "walk") {
+      L.polyline(pts, { color: "#68716b", weight: 3, dashArray: "2 7", opacity: 0.9 }).addTo(drawLayer);
+    } else {
+      const col = BUS_COLORS[bi++ % BUS_COLORS.length];
+      L.polyline(pts, { color: col, weight: 5, opacity: 0.85 }).addTo(drawLayer);
+      if (pts.length) {
+        L.circleMarker(pts[0], { radius: 6, color: "#fff", weight: 2, fillColor: col, fillOpacity: 1 })
+          .bindTooltip(`Board ${leg.route}: ${leg.from}`).addTo(drawLayer);
+        L.circleMarker(pts[pts.length - 1], { radius: 6, color: "#fff", weight: 2, fillColor: col, fillOpacity: 1 })
+          .bindTooltip(`Get off: ${leg.to}`).addTo(drawLayer);
+      }
+      for (const b of leg.live_buses || []) {
+        L.marker([b.lat, b.lon], {
+          icon: L.divIcon({ className: "busmark", html: `${leg.route}`, iconSize: null }),
+        }).bindTooltip(`${esc(leg.route)} · ${esc(b.vehicle || "bus")}<br>arrives in ${minutesText(b.eta_min)}`).addTo(busLayer);
+        bounds.push([b.lat, b.lon]);
+      }
+    }
+  }
+  if (pins.from) bounds.push([pins.from.lat, pins.from.lon]);
+  if (pins.to) bounds.push([pins.to.lat, pins.to.lon]);
+  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+}
+
+$("#go").onclick = async () => {
+  const box = $("#results");
+  const btn = $("#go");
+  btn.disabled = true;
+  box.replaceChildren(h("div", { class: "msg" }, "Looking for buses..."));
+  try {
+    const okA = await resolve("from"), okB = await resolve("to");
+    if (!okA || !okB) {
+      box.replaceChildren(h("div", { class: "msg err" }, "Could not find " + (!okA ? "the start" : "the destination") + ". Pick a stop from the list, type coordinates, or click the map."));
+      return;
+    }
+    const q = new URLSearchParams({
+      from_lat: pins.from.lat, from_lon: pins.from.lon, to_lat: pins.to.lat, to_lon: pins.to.lon,
+      depart: $("#when").value === "at" ? $("#time").value || "09:30" : "now",
+    });
+    const r = await fetch("/plan?" + q);
+    if (!r.ok) {
+      let msg = "Something went wrong.";
+      try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : "Check that both points are inside Delhi."; } catch (e) { /* keep default */ }
+      box.replaceChildren(h("div", { class: "msg err" }, msg));
+      return;
+    }
+    lastData = await r.json();
+    selected = 0;
+    renderResults();
+    if (lastData.options.length) drawOption(lastData.options[0]);
+  } catch (e) {
+    box.replaceChildren(h("div", { class: "msg err" }, "Could not reach the server."));
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+// ---------------------------------------------------------------- stop board
+let boardStop = null, boardTimer = null;
+wireSearch("bstop", "dl-b", (s) => { boardStop = s; loadBoard(true); });
+
+async function loadBoard(fly) {
+  const box = $("#board");
+  if (!boardStop) return;
+  try {
+    const d = await (await fetch("/live/stop?stop_id=" + boardStop.stop_id)).json();
+    box.replaceChildren();
+    busLayer.clearLayers();
+    drawLayer.clearLayers();
+    L.circleMarker([d.stop.lat, d.stop.lon], { radius: 8, color: "#fff", weight: 2, fillColor: "#12654a", fillOpacity: 1 })
+      .bindTooltip(d.stop.name).addTo(drawLayer);
+    if (fly) map.setView([d.stop.lat, d.stop.lon], 15);
+    box.append(h("div", { class: "route", style: "font-weight:600" }, d.stop.name),
+      h("div", { class: "meta hint", style: "margin:0 0 6px" }, `${d.stop.routes} routes serve this stop`));
+    if (!d.live) { box.append(h("div", { class: "msg" }, "Live data is not running, so arrivals cannot be shown.")); return; }
+    if (!d.buses.length) { box.append(h("div", { class: "msg" }, "No buses heading to this stop right now.")); return; }
+    for (const b of d.buses) {
+      box.append(h("div", { class: "board-row" },
+        routeBadge(b.route),
+        h("div", {}, h("div", { class: "desc" }, b.description || ""),
+          b.vehicle ? h("div", { class: "meta" }, "Bus ", h("span", { class: "veh" }, b.vehicle), b.eta_source === "model" ? " · AI ETA" : " · history ETA") : null,
+          h("div", { class: "meta" }, `${b.stops_away} stop${b.stops_away === 1 ? "" : "s"} away · ${b.remaining_m} m${b.standing ? " · standing" : ""} · seen ${b.ping_age_s}s ago`)),
+        h("div", { class: "eta num" }, b.eta_min < 0.5 ? "now" : String(Math.round(b.eta_min)), b.eta_min < 0.5 ? null : h("small", {}, " min"))));
+      L.marker([b.lat, b.lon], { icon: L.divIcon({ className: "busmark", html: b.route, iconSize: null }) })
+        .bindTooltip(`${esc(b.route)} · ${esc(b.vehicle || "bus")}<br>${minutesText(b.eta_min)}`).addTo(busLayer);
+    }
+  } catch (e) {
+    box.replaceChildren(h("div", { class: "msg err" }, "Could not load live buses."));
+  }
+}
+
+// ---------------------------------------------------------------- tabs
+function showTab(name) {
+  for (const t of ["plan", "board"]) {
+    $("#tab-" + t).classList.toggle("active", t === name);
+    $("#pane-" + t).classList.toggle("active", t === name);
+  }
+  clearInterval(boardTimer);
+  drawLayer.clearLayers();
+  busLayer.clearLayers();
+  if (name === "board") {
+    setPick(null);
+    boardTimer = setInterval(() => loadBoard(false), 15000);
+    loadBoard(true);
+  } else if (lastData && lastData.options.length) {
+    drawOption(lastData.options[selected]);
+  }
+}
+$("#tab-plan").onclick = () => showTab("plan");
+$("#tab-board").onclick = () => showTab("board");
+
+// ---------------------------------------------------------------- live status and footer
+async function refreshLive() {
+  const pill = $("#livepill");
+  try {
+    const s = await (await fetch("/live/status")).json();
+    LIVE_ON = !!s.enabled;
+    if (!s.enabled) { pill.className = ""; $("span", pill).textContent = "live feed off"; return; }
+    const m = s.model, f = s.feed;
+    if (f.age_s === null) { pill.className = "warm"; $("span", pill).textContent = "waiting for first live data"; return; }
+    if (m.warm) {
+      pill.className = "on";
+      $("span", pill).textContent = `live · ${m.buses_tracked.toLocaleString()} buses · traffic x${m.network_factor}${m.eta_model && m.eta_model.loaded ? " · AI ETA" : ""}`;
+    } else {
+      pill.className = "warm";
+      $("span", pill).textContent = `live · ${m.buses_tracked.toLocaleString()} buses · learning current traffic`;
+    }
+  } catch (e) { pill.className = ""; $("span", pill).textContent = "server not reachable"; }
+}
+refreshLive();
+setInterval(refreshLive, 20000);
+
+(async () => {
+  try {
+    const d = await (await fetch("/health")).json();
+    const n = (d.eta_days || []).length;
+    $("#foot").textContent = `${d.network}. Ride times learned from ${n} days of collected bus positions; live traffic adjusts them when the feed is on.`;
+  } catch (e) { /* footer is optional */ }
+})();
+</script>
+</body>
+</html>
