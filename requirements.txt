@@ -1,0 +1,8 @@
+pandas
+numpy
+fastapi
+uvicorn
+requests
+gtfs-realtime-bindings
+scikit-learn
+joblib
