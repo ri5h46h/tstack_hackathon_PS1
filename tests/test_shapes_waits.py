@@ -71,6 +71,18 @@ def test_wait_names_and_model():
         assert b2["eta_source"] == "model" and abs((base_eta - b2["eta_s"]) - 30) <= 1
 
 
+def test_quiet_hour():
+    with tempfile.TemporaryDirectory() as tmp:
+        p, _ = TL.build(Path(tmp))
+        o = (T.LAT, T.LON0 - 100 / TL.M_PER_DEG_LON)
+        d = (T.LAT, T.LON0 + 2 * 1000 / TL.M_PER_DEG_LON + 100 / TL.M_PER_DEG_LON)
+        midday = p.plan(o, d, "12:00")["options"][0]      # table: midday 180 s per hop, morning 150 s
+        morning = p.plan(o, d, "09:30")["options"][0]
+        print("quiet hour: midday trip", midday["total_min"], "->", midday["quiet_hour_min"], midday["quiet_hour_bucket"])
+        assert midday["quiet_hour_min"] < midday["total_min"] and midday["slower_than_quiet_min"] > 0
+        assert morning["slower_than_quiet_min"] == 0 and morning["quiet_hour_min"] <= morning["total_min"]
+
+
 def test_features_parity():
     ok = F.interval_ok([30, 5, 30], [500, 500, 100], [700, 520, 700], [5000, 5000, 5000])
     assert ok.tolist() == [True, False, False]
@@ -79,7 +91,7 @@ def test_features_parity():
 
 
 if __name__ == "__main__":
-    for fn in (test_shapes, test_wait_names_and_model, test_features_parity):
+    for fn in (test_shapes, test_wait_names_and_model, test_quiet_hour, test_features_parity):
         print("---", fn.__name__)
         fn()
     print("PASS")

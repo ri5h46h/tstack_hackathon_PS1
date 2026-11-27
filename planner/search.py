@@ -284,6 +284,8 @@ class Planner:
         desc = [{"type": "walk", "to": net.stop_names[first], "minutes": round(access[first] / 60, 1),
                  "what": "walk to first stop", "path": [[float(origin[0]), float(origin[1])], pt(first)]}]
         n_real = n_all = 0
+        rd_used = 0.0
+        by_bucket = {b[0]: 0.0 for b in self.lk.buckets}
         for leg in legs[1:]:
             if leg[0] == "walk":
                 sec = net.walk_seconds(leg[1], leg[2])
@@ -295,6 +297,9 @@ class Planner:
                 _, r, bp, ap = leg
                 w, veh, wsrc, esrc = self._wait(r, bp, t, waits, wm, now_ts)
                 rd = float(ride[r][bp:ap].sum())
+                rd_used += rd
+                for bn in by_bucket:
+                    by_bucket[bn] += float(self._edge_stats(bn)["scaled"][r][bp:ap].sum())
                 t += w + rd
                 n_real += int(real[r][bp:ap].sum())
                 n_all += ap - bp
@@ -317,7 +322,16 @@ class Planner:
         share = n_real / n_all if n_all else 0.0
         conf = "high" if share >= 0.8 else "medium" if share >= 0.5 else "low"
         buses = sum(1 for d in desc if d["type"] == "bus")
+        quiet = {}
+        if by_bucket and any(v > 0 for v in by_bucket.values()):
+            qb = min((b for b in by_bucket if by_bucket[b] > 0), key=lambda b: by_bucket[b])
+            rng = next(x for x in self.lk.buckets if x[0] == qb)
+            q = (t - rd_used + by_bucket[qb]) / 60
+            quiet = {"quiet_hour_min": round(min(q, t / 60), 1),
+                     "quiet_hour_bucket": f"{qb.replace('_', ' ')} ({rng[1]}-{rng[2]})",
+                     "slower_than_quiet_min": round(max(0.0, t / 60 - q), 1)}
         return {
+            **quiet,
             "total_min": round(t / 60, 1),
             "arrive": _fmt_clock(start_sec + t),
             "transfers": max(0, buses - 1),
