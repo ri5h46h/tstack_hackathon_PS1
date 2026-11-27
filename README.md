@@ -1,13 +1,13 @@
 # Delhi bus journey planner
 
-Prototype for the **Delhi Transport Hackathon, Problem Statement 1**: plan bus journeys in Delhi using real bus-location data, with travel-time estimates that use both history and live buses.
+Prototype for the **Delhi Transport Stack Hackathon '26, Problem Statement 1**: plan bus journeys in Delhi using real bus-location data, with travel-time estimates that use both history and live buses.
 
 > [!NOTE]
 > PLEASE READ THE IMPORTANT NOTE below :
 
 > [!IMPORTANT]
 > Everything is built from **my own collected data** (the GTFS-realtime VehiclePositions feed, saved over several days using a collector script of my own `collector/otd_collector.py`) plus the GTFS static files and the live feed. No sample data from the hackathon (that provided october month data) is mixed in. So as a result, attempting to run scripts 
-in `build/` won't work. If the evaluators/juries wish to see how my collected data looks, they can run the collector script for 4-5 minutes and it will generate the CSVs. However, still don't run any script in `build/` unless 3-4 days of data is collected.
+in `build/` won't work. If the evaluators/juries wish to see how my collected data looks, they can run the collector script (instructions available below) for 4-5 minutes and it will generate the CSVs. However, still don't run any script in `build/` unless 3-4 days of data is collected.
 
 - Journey API: `GET /journeys?from=...&to=...&depart=...` returns options as JSON
 - Web screen: map with trip planner, live buses and a stop board
@@ -56,7 +56,7 @@ The learned ETA table in `data/` is keyed by the route ids and stop ids of the G
 
 ### 3. Install the dependencies (pick one way)
 
-**With uv (recommended)**
+**With uv (recommended, faster)**
 
 ```bash
 # install uv once: https://docs.astral.sh/uv/getting-started/installation/
@@ -87,11 +87,9 @@ cp .env.example .env        # Windows: copy .env.example .env
 Edit `.env` and paste your own keys:
 
 ```
-TSTACK_API_KEY=your key from Delhi Transport Stack (main live feed)
-OTD_API_KEY=your key from Delhi OTD (backup feed)
+TSTACK_API_KEY="your key from Delhi Transport Stack (main live feed)"
+OTD_API_KEY="your key from Delhi OTD (backup feed)"
 ```
-
-Optional: add `ETA_THREADS=2` to limit the CPU used by the live ETA model.
 
 ### 5. Run it
 
@@ -244,7 +242,7 @@ Full report: [`VALIDATION.md`](VALIDATION.md). In short, on 328,129 stop pairs f
 The test shows the learned table only. The live correction applies to trips starting now and is not part of it. To rerun it you need the collected days (see the note at the top), then:
 
 ```bash
-uv run python eval/validate_trips.py --threads 2
+uv run python eval/validate_trips.py
 uv run python eval/validate_trips.py plot      # chart from the saved results (needs matplotlib)
 ```
 
@@ -256,7 +254,7 @@ The repo already contains a ready ETA table and trained model, so you can skip t
 
 ```bash
 # 1. Collect the live feed day by day into data/clean/ (needs keys in .env)
-uv run python collector/otd_collector.py run --plain
+uv run python collector/otd_collector.py run --save-raw
 
 # 2. Match pings to stops: writes arrivals, runs and pings files into data/arrivals/
 uv run python build/build_arrivals.py run
@@ -266,7 +264,7 @@ uv run python build/build_eta_bucketed.py build
 uv run python build/build_eta_bucketed.py check      # honest test on a day it did not learn from
 
 # 4. ETA correction model -> models/eta_model.joblib
-uv run python build/train_eta.py train --threads 2
+uv run python build/train_eta.py train
 ```
 
 Notes:
