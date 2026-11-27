@@ -6,3 +6,4 @@ requests
 gtfs-realtime-bindings
 scikit-learn
 joblib
+matplotlib
