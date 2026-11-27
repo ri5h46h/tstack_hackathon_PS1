@@ -44,39 +44,70 @@ SPAN_BINS = [(1, 4, "3-4 stops"), (5, 9, "5-9 stops"), (10, 19, "10-19 stops"), 
 
 
 # ---------------------------------------------------------------- timetable
-def load_timetable(gtfs_dir, trip_ids, log=print):
-    """{(trip_id, stop_id): scheduled seconds}. Says clearly why it is empty if it is."""
-    p = Path(gtfs_dir) / "stop_times.txt"
-    if not p.exists():
-        log(f"timetable: {p.resolve()} does not exist (run from the repo root or pass --gtfs <folder>)")
-        return {}
-    out = {}
-    want = {str(t) for t in trip_ids}
-    rows = hits = 0
-    sample = None
-    for chunk in pd.read_csv(p, usecols=["trip_id", "stop_id", "arrival_time"], chunksize=1_000_000,
-                             dtype={"trip_id": str, "arrival_time": str}):
-        rows += len(chunk)
-        if sample is None and len(chunk):
-            sample = str(chunk["trip_id"].iloc[0])
-        chunk = chunk[chunk["trip_id"].isin(want) & chunk["arrival_time"].notna()]
-        if chunk.empty:
-            continue
-        hits += chunk["trip_id"].nunique()
-        hms = chunk["arrival_time"].str.strip().str.split(":", expand=True).astype(float)
-        sec = hms[0] * 3600 + hms[1] * 60 + hms[2]
-        for t, st, v in zip(chunk["trip_id"], chunk["stop_id"], sec):
-            out.setdefault((t, int(st)), v)
-    if not out:
-        ex = sorted(want)[:3]
-        log(f"timetable: read {rows:,} rows from {p.name} but none match the trip_ids in the arrivals files.\n"
-            f"  trip_id in arrivals looks like: {ex}\n  trip_id in stop_times looks like: {sample!r}\n"
-            f"  (the feed's trip ids may differ from the GTFS ones; the timetable column is skipped)")
-    return out
+FEED_TRIP = __import__("re").compile(r"^\d+_(\d{1,2})_(\d{2})_")
+MATCH_WINDOW_S = 45 * 60      # a feed trip may start this far from the scheduled start
+MAX_CANDIDATES = 4
+
+
+def load_timetable(gtfs_dir, run_trips, log=print):
+    """
+    run_trips: DataFrame with columns route_id, trip_id (one row per distinct pair in the arrivals).
+    Returns ({(gtfs_trip_id, stop_id): scheduled seconds}, {(route_id, feed_trip_id): [gtfs trip ids]}).
+
+    The live feed names trips like '1000_06_13_185' (route, start hour, start minute, counter), GTFS
+    names them like '1000_FULL_06_10' or '1000_SHORT_11_05'. A route has several patterns (FULL, SHORT)
+    and trips at several times of day. For each feed trip we take the GTFS trips of the same route,
+    nearest in start time (within 45 min), and later choose the first one that serves both stops of
+    the stretch being tested. If the ids are already identical they are used as they are.
+    """
+    g = Path(gtfs_dir)
+    if not (g / "stop_times.txt").exists():
+        log(f"timetable: {(g / 'stop_times.txt').resolve()} does not exist (run from the repo root or pass --gtfs <folder>)")
+        return {}, {}
+    st = pd.read_csv(g / "stop_times.txt", usecols=["trip_id", "stop_id", "arrival_time"],
+                     dtype={"trip_id": str, "arrival_time": str}).dropna(subset=["arrival_time"])
+    hms = st["arrival_time"].str.strip().str.split(":", expand=True).astype(float)
+    st["sec"] = hms[0] * 3600 + hms[1] * 60 + hms[2]
+    start = st.groupby("trip_id")["sec"].min()
+    cand = {}
+    by_route = {}
+    if (g / "trips.txt").exists():
+        tr = pd.read_csv(g / "trips.txt", usecols=["route_id", "trip_id"], dtype={"trip_id": str})
+        tr = tr[tr["trip_id"].isin(start.index)]
+        tr["start"] = tr["trip_id"].map(start)
+        by_route = {int(r): d[["start", "trip_id"]].to_numpy() for r, d in tr.groupby("route_id")}
+    n_ok = 0
+    pairs = run_trips.dropna().drop_duplicates()
+    for r, t in zip(pairs["route_id"], pairs["trip_id"]):
+        r, t = int(r), str(t)
+        if t in start.index:
+            cand[(r, t)] = [t]
+        else:
+            m = FEED_TRIP.match(t)
+            arr = by_route.get(r)
+            if not m or arr is None:
+                continue
+            want = int(m.group(1)) * 3600 + int(m.group(2)) * 60
+            d = np.abs(arr[:, 0].astype(float) - want)
+            order = [k for k in np.argsort(d)[:MAX_CANDIDATES] if d[k] <= MATCH_WINDOW_S]
+            if order:
+                cand[(r, t)] = [str(arr[k, 1]) for k in order]
+        n_ok += (r, t) in cand
+    if not cand:
+        log(f"timetable: read {len(st):,} rows but no feed trip could be matched to a GTFS trip.\n"
+            f"  feed trip_id looks like: {list(pairs['trip_id'][:3])}\n  GTFS trip_id looks like: {list(start.index[:3])}")
+        return {}, {}
+    used = {x for v in cand.values() for x in v}
+    sub = st[st["trip_id"].isin(used)]
+    tt = {}
+    for t, stp, v in zip(sub["trip_id"], sub["stop_id"], sub["sec"]):
+        tt.setdefault((t, int(stp)), v)
+    log(f"timetable: matched {n_ok:,} of {len(pairs):,} feed trips to GTFS trips")
+    return tt, cand
 
 
 # ---------------------------------------------------------------- one held-out group
-def group_cases(arr, lk, lk_all, tt, pairs_per_run, rng):
+def group_cases(arr, lk, lk_all, tt, trip_map, pairs_per_run, rng):
     a = arr[arr["quality"] != "coarse"].sort_values(["run_key", "stop_idx"])
     rows = []
     for run, d in a.groupby("run_key", sort=False):
@@ -88,7 +119,7 @@ def group_cases(arr, lk, lk_all, tt, pairs_per_run, rng):
         sid = d["stop_id"].values.astype("int64")
         ts = d["arrive_ts"].values.astype(float)
         prog = d["stop_prog_m"].values.astype(float)
-        trip = str(d["trip_id"].iloc[0]) if "trip_id" in d else ""
+        cands = trip_map.get((rid, str(d["trip_id"].iloc[0])), [])
         veh = d["vehicle_id"].iloc[0]
         spans = [s for s in SPANS if s < n]
         if not spans:
@@ -111,12 +142,13 @@ def group_cases(arr, lk, lk_all, tt, pairs_per_run, rng):
                 est += sec if sec else 60.0
                 est_all += sec_a if sec_a else 60.0
                 n_pair += src in ("pair_blend", "pair_all")
-            sched = None
-            if tt:
-                a0, a1 = tt.get((trip, int(sid[i]))), tt.get((trip, int(sid[j])))
+            sched, trip = None, ""
+            for c in cands:
+                a0, a1 = tt.get((c, int(sid[i]))), tt.get((c, int(sid[j])))
                 if a0 is not None and a1 is not None and a1 > a0:
-                    sched = a1 - a0
-            rows.append({"run": int(run), "route_id": rid, "vehicle_id": veh, "trip_id": trip,
+                    sched, trip = a1 - a0, c
+                    break
+            rows.append({"run": int(run), "route_id": rid, "vehicle_id": veh, "gtfs_trip": trip,
                          "from_stop": int(sid[i]), "to_stop": int(sid[j]), "stops": span,
                          "dist_m": round(prog[j] - prog[i]), "hour": hour, "bucket": bucket,
                          "real_s": round(real), "ours_s": round(est), "allday_s": round(est_all),
@@ -256,9 +288,7 @@ def run(a, log=print, bars=True):
         seg["grp"] = T.vehicle_fold(seg["vehicle_id"], n_groups)
         arr["grp"] = T.vehicle_fold(arr["vehicle_id"], n_groups)
     log(f"days: {', '.join(day_list)}   groups: {n_groups} (by {mode})")
-    tt = {} if a.no_timetable else load_timetable(a.gtfs, arr["trip_id"].dropna().unique(), log)
-    if tt:
-        log(f"timetable entries loaded: {len(tt):,}")
+    tt, trip_map = ({}, {}) if a.no_timetable else load_timetable(a.gtfs, arr[["route_id", "trip_id"]], log)
 
     rows = []
     bar = T.Progress("scoring held-out trips", n_groups, bars)
@@ -268,7 +298,7 @@ def run(a, log=print, bars=True):
         info = {**final_info, "scale_bucket": sb, "scale_all": sall}
         lk = T.make_lookup(learn, buckets, info)
         lk_all = lk
-        rows += group_cases(arr[arr["grp"] == g], lk, lk_all, tt, a.pairs_per_run, np.random.default_rng(7 + g))
+        rows += group_cases(arr[arr["grp"] == g], lk, lk_all, tt, trip_map, a.pairs_per_run, np.random.default_rng(7 + g))
         bar.update()
     bar.close()
     if not rows:
@@ -284,7 +314,24 @@ def run(a, log=print, bars=True):
     return df
 
 
+def _test_matching():
+    with tempfile.TemporaryDirectory() as tmp:
+        g = Path(tmp)
+        pd.DataFrame([("1_FULL_06_05", "06:05:00", 10, 1), ("1_FULL_06_05", "06:09:30", 11, 2),
+                      ("1_SHORT_06_20", "06:20:00", 10, 1), ("1_SHORT_06_20", "06:23:00", 12, 2),
+                      ("1_FULL_07_00", "07:00:00", 10, 1), ("1_FULL_07_00", "07:05:00", 11, 2)],
+                     columns=["trip_id", "arrival_time", "stop_id", "stop_sequence"]).to_csv(g / "stop_times.txt", index=False)
+        pd.DataFrame({"route_id": [1, 1, 1], "trip_id": ["1_FULL_06_05", "1_SHORT_06_20", "1_FULL_07_00"]}
+                     ).to_csv(g / "trips.txt", index=False)
+        rt = pd.DataFrame({"route_id": [1, 1, 1, 9], "trip_id": ["1_06_13_77", "1_09_00_1", "1_20_00_1", "9_06_05_1"]})
+        tt, cand = load_timetable(g, rt, log=lambda *x: None)
+        assert cand[(1, "1_06_13_77")][0] in ("1_FULL_06_05", "1_SHORT_06_20"), cand
+        assert (1, "1_20_00_1") not in cand and (9, "9_06_05_1") not in cand
+        assert tt[("1_FULL_06_05", 11)] - tt[("1_FULL_06_05", 10)] == 270
+
+
 def _selftest():
+    _test_matching()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "data"
         T._synthetic(root)
