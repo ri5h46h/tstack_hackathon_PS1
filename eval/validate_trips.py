@@ -230,6 +230,7 @@ def plot(df, out):
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except Exception:  # noqa: BLE001
+        print("chart skipped: matplotlib is not installed (uv add matplotlib, then: validate_trips.py plot)")
         return False
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.4))
     s = df.sample(min(len(df), 6000), random_state=1)
@@ -360,7 +361,7 @@ def _selftest():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", nargs="?", default="run", choices=["run", "selftest"])
+    ap.add_argument("cmd", nargs="?", default="run", choices=["run", "plot", "selftest"])
     ap.add_argument("--data", default="data")
     ap.add_argument("--gtfs", default="gtfs")
     ap.add_argument("--out", default="eval/validation")
@@ -370,7 +371,18 @@ def main():
     ap.add_argument("--threads", type=int, default=0, help="CPU threads for numpy/pandas (0 = all)")
     a = ap.parse_args()
     T.limit_threads(a.threads)
-    _selftest() if a.cmd == "selftest" else run(a)
+    if a.cmd == "selftest":
+        _selftest()
+    elif a.cmd == "plot":
+        out = Path(a.out)
+        if not (out / "trips.csv").exists():
+            sys.exit(f"{out / 'trips.csv'} not found: run  uv run eval/validate_trips.py  first")
+        if plot(pd.read_csv(out / "trips.csv"), out):
+            print(f"wrote {out / 'validation.png'}")
+        else:
+            sys.exit("matplotlib is not installed: run  uv add matplotlib  (or pip install matplotlib) and try again")
+    else:
+        run(a)
 
 
 if __name__ == "__main__":
