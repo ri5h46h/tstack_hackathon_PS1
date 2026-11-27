@@ -17,7 +17,7 @@ data/analytics/**
 !data/raw/.gitkeep
 !data/health/.gitkeep
 !data/arrivals/.gitkeep
-
+eval/validation/trips.csv
 __pycache__/
 *.pyc
 .venv/
