@@ -16,6 +16,7 @@ in `build/` won't work. If the evaluators/juries wish to see how my collected da
 - Each option also shows how long the same trip usually takes at a quieter time of day, so the effect of traffic is visible
 - Technical note: [`TECHNICAL_NOTE.md`](TECHNICAL_NOTE.md) (GPS-to-route linking, travel time per stretch, live + history, waiting time, little-data behaviour)
 - Validation report: [`VALIDATION.md`](VALIDATION.md) (estimates against real bus trips and the GTFS timetable, 13 held-out days)
+- Pipeline diagrams: [`PIPELINE.md`](PIPELINE.md)
 
 ---
 
