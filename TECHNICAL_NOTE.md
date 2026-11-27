@@ -24,14 +24,25 @@ Everything here uses only our own collected bus-location data (GTFS-realtime Veh
 - **Waiting time:** for trips starting now, the wait at a boarding stop is the time until the next live bus on that route reaches it after the rider arrives (capped at 3x the timetable wait). With no live bus it uses half the timetable headway.
 - **Journey search:** RAPTOR-style rounds (up to 3 buses), walking links of up to 400 m between stops, ride times scaled by live ratios for "now" trips.
 
-## 4. API
+## 4. Waiting, signals and sparse data
+- **Waiting at stops and signals is part of the travel time, not separate.** A stretch's time runs from arrival at one stop to arrival at the next, so dwell time and signal waits are inside it. We chose this because the rider feels them as part of the ride, and splitting them from GPS pings at a few-second spacing would be unreliable. The AI correction also sees how long a bus has stood still.
+- **Waiting for the bus** (before boarding) is handled separately: the next live bus when one is found, otherwise half the usual gap between buses at that hour.
+- **Little or no live data:** until enough buses have reported (about 3,000 bus-seconds of observations in the last 10 minutes) the live ratio stays at 1.0, so the learned table is used. A route with few buses leans on the network value. Without keys, the planner works from the table only.
+- **Little history on a stretch:** blend with the all-day number, then fall back to route speed in that time bucket, route speed all day, and network speed. The option's confidence label shows how much of the ride used real stop-pair data.
+- **Usual time at a quieter hour:** for each option we re-add the ride times for the quietest time bucket, keeping walking and waiting, and show the difference (`quiet_hour_min`, `slower_than_quiet_min`).
+
+## 5. Validation
+Results on 328,129 real bus stop pairs from 13 days, each day tested with a table built without it: average error 19.0% for our estimate against 30.1% for the GTFS timetable, bias +0.3% against +5.1%. Time of day helps most in peak hours and slightly hurts at midday. Details in `VALIDATION.md`.
+
+## 6. API
 `GET /journeys?from=<lat,lon | stop:ID>&to=<lat,lon | stop:ID>&depart=<now | HH:MM>&max_transfers=2&live=true`
 
-Returns options with `total_min`, `arrive`, `transfers`, `confidence`, and `legs`. Bus legs include route, stops, `ride_min`, `wait_min`, `wait_source` (live / timetable), `next_vehicle`, a road-following `path`, and `live_buses` (vehicle number, ETA, stops away, `eta_source` model / history). Interactive docs at `/docs`; the web screen at `/`. Other endpoints: `/live/stop` (stop board), `/stops` (search), `/live/status`, `/health`.
+Returns options with `total_min`, `arrive`, `transfers`, `confidence`, `quiet_hour_min`, `slower_than_quiet_min` and `legs`. Bus legs include route, stops, `ride_min`, `wait_min`, `wait_source` (live / timetable), `next_vehicle`, a road-following `path`, and `live_buses` (vehicle number, ETA, stops away, `eta_source` model / history). Interactive docs at `/docs`; the web screen at `/`. Other endpoints: `/live/stop` (stop board), `/stops` (search), `/live/status`, `/health`.
 
-## 5. Limits
-- Only our collected days are used, so rarely served stop pairs fall back to speed estimates.
+## 7. Limits
+- Only our collected days are used, so rarely served stop pairs fall back to speed estimates. Evening and late-night hours have fewer days of data than the morning.
 - Only the longest trip pattern of each route is planned.
 - Walking uses straight-line distance x 1.3, not footpaths.
 - Live data is used only for trips starting now.
+- Weekdays and weekends are not separated, and a trip uses the time bucket of its departure time for the whole journey.
 - Buses that have not left a terminal are not in the feed, so early waits can be underestimated.

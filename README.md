@@ -13,7 +13,9 @@ in `build/` won't work. If the evaluators/juries wish to see how my collected da
 - Web screen: map with trip planner, live buses and a stop board
 - Learned travel times per stretch of road, by time of day
 - Live correction: current traffic, next-bus waiting time, optional AI ETA model
-- Technical note: [`TECHNICAL_NOTE.md`](TECHNICAL_NOTE.md) (GPS-to-route linking, travel time per stretch, live + history)
+- Each option also shows how long the same trip usually takes at a quieter time of day, so the effect of traffic is visible
+- Technical note: [`TECHNICAL_NOTE.md`](TECHNICAL_NOTE.md) (GPS-to-route linking, travel time per stretch, live + history, waiting time, little-data behaviour)
+- Validation report: [`VALIDATION.md`](VALIDATION.md) (estimates against real bus trips and the GTFS timetable, 13 held-out days)
 
 ---
 
@@ -21,7 +23,7 @@ in `build/` won't work. If the evaluators/juries wish to see how my collected da
 
 | Screen / endpoint | What it gives |
 |---|---|
-| `/` web page, tab **Plan a trip** | Pick start and end on the map or by stop name. See up to 3 options with walking, buses, waits, transfers, confidence, and live buses coming to each boarding stop (with vehicle number). |
+| `/` web page, tab **Plan a trip** | Pick start and end on the map or by stop name. See up to 3 options with walking, buses, waits, transfers, confidence, the usual time at a quieter hour, and live buses coming to each boarding stop (with vehicle number). |
 | `/` web page, tab **Stop board** | Pick a stop. See buses heading there with ETA, stops away, vehicle number. |
 | `/journeys` | The documented journey API (below). |
 | `/docs` | Interactive API docs (try requests in the browser). |
@@ -139,6 +141,9 @@ Response (shortened):
     {
       "total_min": 62.4,
       "arrive": "22:32",
+      "quiet_hour_min": 51.0,
+      "quiet_hour_bucket": "morning (6-11)",
+      "slower_than_quiet_min": 11.4,
       "transfers": 1,
       "confidence": "high",
       "data_share": 0.91,
@@ -162,6 +167,7 @@ Response (shortened):
 - `wait_source` is `live` (next live bus) or `timetable` (half the average gap between buses).
 - `eta_source` is `model` (AI correction) or `history` (table time x live traffic ratio).
 - `confidence` says how much of the ride time came from real stop-to-stop data: `high`, `medium` or `low`.
+- `quiet_hour_min` is the usual time for the same trip at the quietest time of day (ride times of that bucket, same walking and waiting). `slower_than_quiet_min` says how much slower the trip is at the chosen departure time.
 - `path` follows the road shape from `shapes.txt` where available.
 
 ### Other endpoints
@@ -185,6 +191,12 @@ Full detail is in [`TECHNICAL_NOTE.md`](TECHNICAL_NOTE.md).
 3. **Live and history together.** Live buses give a traffic ratio (observed time / table time) for the whole network (last 10 min) and for each route (last 20 min). A trained model can correct the resulting ETA further. The wait at a stop is the time until the next live bus arrives.
 4. **Search.** RAPTOR-style rounds (up to 3 buses) with short walking links between stops.
 
+**Waiting at stops and signals.** Our stop-to-stop times run from the bus's arrival at one stop to its arrival at the next. So the time standing at stops and at signals is inside the number and is not split out. The ETA model also sees how long a bus has been standing still. The wait for a bus (before boarding) is separate: the next live bus, or half the usual gap between buses when no live bus is found.
+
+**When there is little or no live data.** Nothing breaks. Until enough buses have reported, the traffic ratio stays at 1.0 and the learned table is used as it is. Without API keys the planner runs on the table alone. For a stop pair with too little history, the planner falls back step by step to the route's speed at that time of day, then all day, then the network speed, and the option shows lower confidence.
+
+**Noisy GPS.** Pings that jump, run backwards, are too fast (over 20 m/s), are too far from the route (over 100 m) or have gaps over 2 minutes are dropped before anything is learned.
+
 ---
 
 ## Project layout
@@ -196,6 +208,11 @@ planner/
   search.py     journey search, waiting times, leg descriptions
   live.py       live feed reader, live traffic ratio, next-bus waits, ETA model hook
   features.py   numbers shared by live serving and training (same definitions)
+eval/
+  validate_trips.py       checks the estimates against real bus trips and the GTFS timetable
+  validation/             summary.md and validation.png from the 13-day run
+VALIDATION.md             validation report
+TECHNICAL_NOTE.md         technical note
 build/
   build_arrivals.py       pings -> stop arrival times, runs and cleaned pings
   build_eta_bucketed.py   arrivals -> travel-time table by time of day
@@ -210,6 +227,24 @@ data/
 models/         eta_model.joblib and its info file (committed)
 gtfs/           put the GTFS static files here (not committed)
 tests/          tests for planner, live model, shapes and waits
+```
+
+---
+
+## Validation
+
+Full report: [`VALIDATION.md`](VALIDATION.md). In short, on 328,129 stop pairs from real bus runs on days the model did not learn from:
+
+| method | average error | within 20% of real time |
+|---|---|---|
+| **Ours (time-of-day table)** | **19.0%** (2.5 min) | **64%** |
+| GTFS timetable | 30.1% (3.7 min) | 42% |
+
+The test shows the learned table only. The live correction applies to trips starting now and is not part of it. To rerun it you need the collected days (see the note at the top), then:
+
+```bash
+uv run python eval/validate_trips.py --threads 2
+uv run python eval/validate_trips.py plot      # chart from the saved results (needs matplotlib)
 ```
 
 ---
@@ -249,6 +284,7 @@ uv run python tests/test_live.py
 uv run python tests/test_shapes_waits.py
 uv run python build/build_eta_bucketed.py selftest
 uv run python build/train_eta.py selftest
+uv run python eval/validate_trips.py selftest
 ```
 
 They use a tiny made-up network and need no GTFS files, data or keys.
@@ -275,6 +311,8 @@ They use a tiny made-up network and need no GTFS files, data or keys.
 - Only the longest trip pattern of each route is planned.
 - Walking uses straight-line distance x 1.3, not footpaths.
 - Live data is used only for trips starting **now**.
+- Departure time is a time of day (`HH:MM`). Weekdays and weekends are not separated, and a trip uses the time bucket of its departure time for the whole journey.
+- `from` and `to` take coordinates or a stop id; typing a stop name works on the web page, not yet in the API.
 - Buses that have not left a terminal are not in the feed, so early waits can be underestimated.
 
 ---
