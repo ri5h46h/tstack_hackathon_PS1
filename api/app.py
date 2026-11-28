@@ -11,6 +11,7 @@ still works from the learned data; the live parts just stay off.
 """
 import sys
 import time
+from typing import Optional
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -103,13 +104,16 @@ def live_status():
 
 
 @app.get("/live/stop")
-def live_stop(stop_id: int, max_buses: int = Query(8, ge=1, le=20)):
-    """Buses approaching one stop, from all routes that serve it."""
+def live_stop(stop_id: int, max_buses: int = Query(8, ge=1, le=20), route_id: Optional[int] = None):
+    """Buses approaching one stop, from all routes that serve it (or only route_id when given)."""
     net = planner().net
     i = net.stop_index(stop_id)
     if i is None:
         raise HTTPException(404, "unknown stop_id")
-    buses = state["model"].approaching(i, None, max_n=max_buses) if state["model"] else []
+    ri = net.route_index(route_id) if route_id is not None else None
+    if route_id is not None and ri is None:
+        raise HTTPException(404, "unknown route_id")
+    buses = state["model"].approaching(i, ri, max_n=max_buses) if state["model"] else []
     return {"stop": {"stop_id": stop_id, "name": net.stop_names[i],
                      "lat": float(net.stop_lat[i]), "lon": float(net.stop_lon[i]),
                      "routes": len(net.stop_routes[i])},

@@ -105,7 +105,7 @@
     white-space: normal; overflow-wrap: anywhere;
   }
   .badge .dir { display: block; font-size: 9.5px; font-weight: 600; letter-spacing: 0.08em; opacity: .85; }
-  .veh { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--ink); }
+  .veh { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--green); font-weight: 650; }
   .leg .route { font-weight: 600; }
   .leg .meta { color: var(--muted); font-size: 12.5px; }
   .live { margin-top: 5px; font-size: 12.5px; }
@@ -344,10 +344,10 @@ function liveLine(leg) {
     h("span", { class: "meta" }, ` (${first.stops_away} stop${first.stops_away === 1 ? "" : "s"} away`),
     h("span", { class: "meta" }, first.eta_source === "model" ? ", AI ETA" : ", history ETA"),
     first.vehicle ? h("span", { class: "meta" }, " · ") : null,
-    first.vehicle ? h("span", { class: "veh", title: "vehicle id" }, first.vehicle) : null,
+    first.vehicle ? h("span", { class: "veh", title: "vehicle number" }, first.vehicle) : null,
     h("span", { class: "meta" }, ")"),
     leg.live_buses.length > 1 ? h("div", { class: "chips" },
-      leg.live_buses.slice(1).map((b) => h("span", { class: "chip" + (b.standing ? " stand" : ""), title: vehText(b) }, minutesText(b.eta_min) + (b.vehicle ? " · " + b.vehicle : "")))) : null);
+      leg.live_buses.slice(1).map((b) => h("span", { class: "chip" + (b.standing ? " stand" : ""), title: vehText(b) }, minutesText(b.eta_min), b.vehicle ? " · " : "", b.vehicle ? h("span", { class: "veh" }, b.vehicle) : null))) : null);
 }
 
 function optionCard(opt, i, live) {
@@ -365,7 +365,8 @@ function optionCard(opt, i, live) {
       routeBadge(leg.route, BUS_COLORS[opt.legs.filter((l) => l.type === "bus").indexOf(leg) % BUS_COLORS.length]),
       h("div", {},
         h("div", { class: "route" }, `${leg.from} → ${leg.to}`),
-        h("div", { class: "meta" }, `${leg.stops} stops · ride about ${Math.round(leg.ride_min)} min · wait about ${Math.round(leg.wait_min)} min ${leg.wait_source === "live" ? "(next live bus" + (leg.next_vehicle ? " " + leg.next_vehicle : "") + ")" : "(timetable average)"}`),
+        h("div", { class: "meta" }, `${leg.stops} stops · ride about ${Math.round(leg.ride_min)} min · wait about ${Math.round(leg.wait_min)} min `,
+          leg.wait_source === "live" ? h("span", {}, "(next live bus", leg.next_vehicle ? " " : "", leg.next_vehicle ? h("span", { class: "veh" }, leg.next_vehicle) : null, ")") : "(timetable average)"),
         leg.description ? h("div", { class: "meta" }, leg.description) : null,
         liveLine(leg)));
   });
@@ -400,9 +401,24 @@ function selectOption(i) {
   drawOption(lastData.options[i]);
 }
 
+// bus bubbles of one option; also used by the live refresh (does not move the map)
+function drawBuses(opt) {
+  busLayer.clearLayers();
+  const pos = [];
+  for (const leg of opt.legs) {
+    if (leg.type !== "bus") continue;
+    for (const b of leg.live_buses || []) {
+      L.marker([b.lat, b.lon], {
+        icon: L.divIcon({ className: "busmark", html: `${leg.route}`, iconSize: null }),
+      }).bindTooltip(`${esc(leg.route)} · ${esc(b.vehicle || "bus")}<br>arrives in ${minutesText(b.eta_min)}`).addTo(busLayer);
+      pos.push([b.lat, b.lon]);
+    }
+  }
+  return pos;
+}
+
 function drawOption(opt) {
   drawLayer.clearLayers();
-  busLayer.clearLayers();
   const bounds = [];
   let bi = 0;
   for (const leg of opt.legs) {
@@ -419,14 +435,9 @@ function drawOption(opt) {
         L.circleMarker(pts[pts.length - 1], { radius: 6, color: "#fff", weight: 2, fillColor: col, fillOpacity: 1 })
           .bindTooltip(`Get off: ${leg.to}`).addTo(drawLayer);
       }
-      for (const b of leg.live_buses || []) {
-        L.marker([b.lat, b.lon], {
-          icon: L.divIcon({ className: "busmark", html: `${leg.route}`, iconSize: null }),
-        }).bindTooltip(`${esc(leg.route)} · ${esc(b.vehicle || "bus")}<br>arrives in ${minutesText(b.eta_min)}`).addTo(busLayer);
-        bounds.push([b.lat, b.lon]);
-      }
     }
   }
+  drawBuses(opt).forEach((p) => bounds.push(p));
   if (pins.from) bounds.push([pins.from.lat, pins.from.lon]);
   if (pins.to) bounds.push([pins.to.lat, pins.to.lon]);
   if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
@@ -458,12 +469,41 @@ $("#go").onclick = async () => {
     selected = 0;
     renderResults();
     if (lastData.options.length) drawOption(lastData.options[0]);
+    startPlanLive();
   } catch (e) {
     box.replaceChildren(h("div", { class: "msg err" }, "Could not reach the server."));
   } finally {
     btn.disabled = false;
   }
 };
+
+// ---------------------------------------------------------------- live refresh of planned journeys
+let planTimer = null;
+async function refreshPlanLive() {
+  if (!lastData || !LIVE_ON || document.hidden) return;
+  const keys = new Map();
+  for (const o of lastData.options) for (const l of o.legs) {
+    if (l.type === "bus" && l.live_buses !== undefined && l.from_stop_id != null && l.route_id != null) keys.set(l.from_stop_id + "|" + l.route_id, [l.from_stop_id, l.route_id]);
+  }
+  if (!keys.size) return;
+  const ids = [...keys.keys()];
+  try {
+    const res = await Promise.all(ids.map((k) => fetch(`/live/stop?stop_id=${keys.get(k)[0]}&route_id=${keys.get(k)[1]}&max_buses=3`).then((r) => r.json())));
+    const by = new Map(ids.map((k, i) => [k, res[i].buses || []]));
+    for (const o of lastData.options) for (const l of o.legs) {
+      const k = l.from_stop_id + "|" + l.route_id;
+      if (l.type === "bus" && by.has(k)) l.live_buses = by.get(k);
+    }
+    if ($("#pane-plan").classList.contains("active")) {
+      renderResults();
+      drawBuses(lastData.options[selected]);
+    }
+  } catch (e) { /* keep what is on screen, try again next time */ }
+}
+function startPlanLive() {
+  clearInterval(planTimer);
+  planTimer = setInterval(refreshPlanLive, 15000);
+}
 
 // ---------------------------------------------------------------- stop board
 let boardStop = null, boardTimer = null;
@@ -506,6 +546,7 @@ function showTab(name) {
     $("#pane-" + t).classList.toggle("active", t === name);
   }
   clearInterval(boardTimer);
+  clearInterval(planTimer);
   drawLayer.clearLayers();
   busLayer.clearLayers();
   if (name === "board") {
@@ -514,6 +555,7 @@ function showTab(name) {
     loadBoard(true);
   } else if (lastData && lastData.options.length) {
     drawOption(lastData.options[selected]);
+    startPlanLive();
   }
 }
 $("#tab-plan").onclick = () => showTab("plan");
