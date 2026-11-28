@@ -231,6 +231,50 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 const drawLayer = L.layerGroup().addTo(map);
 const busLayer = L.layerGroup().addTo(map);
 
+// Bus bubbles glide to their new position instead of jumping.
+const busMgr = {
+  m: new Map(),
+  calm: !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches),
+  sync(items) {
+    const seen = new Set();
+    for (const it of items) {
+      seen.add(it.key);
+      const e = this.m.get(it.key);
+      if (!e) {
+        const marker = L.marker([it.lat, it.lon], { icon: L.divIcon({ className: "busmark", html: it.label, iconSize: null }) })
+          .bindTooltip(it.tip).addTo(busLayer);
+        this.m.set(it.key, { marker, raf: 0 });
+      } else {
+        e.marker.setTooltipContent(it.tip);
+        this.move(e, it.lat, it.lon);
+      }
+    }
+    for (const [k, e] of this.m) {
+      if (!seen.has(k)) { cancelAnimationFrame(e.raf); busLayer.removeLayer(e.marker); this.m.delete(k); }
+    }
+  },
+  move(e, lat, lon) {
+    cancelAnimationFrame(e.raf);
+    const from = e.marker.getLatLng();
+    const dLat = lat - from.lat, dLon = lon - from.lng;
+    if (Math.abs(dLat) < 1e-7 && Math.abs(dLon) < 1e-7) return;
+    if (this.calm || map.distance(from, [lat, lon]) > 3000) { e.marker.setLatLng([lat, lon]); return; }
+    const t0 = performance.now(), dur = 4000;
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / dur);
+      const q = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;      // ease in and out
+      e.marker.setLatLng([from.lat + dLat * q, from.lng + dLon * q]);
+      if (p < 1) e.raf = requestAnimationFrame(step);
+    };
+    e.raf = requestAnimationFrame(step);
+  },
+  clear() {
+    for (const e of this.m.values()) cancelAnimationFrame(e.raf);
+    this.m.clear();
+    busLayer.clearLayers();
+  },
+};
+
 const pins = { from: null, to: null };
 const pinMarkers = { from: null, to: null };
 const PIN_COLOR = { from: "#12654a", to: "#b3342b" };
@@ -403,18 +447,16 @@ function selectOption(i) {
 
 // bus bubbles of one option; also used by the live refresh (does not move the map)
 function drawBuses(opt) {
-  busLayer.clearLayers();
-  const pos = [];
+  const items = [];
   for (const leg of opt.legs) {
     if (leg.type !== "bus") continue;
     for (const b of leg.live_buses || []) {
-      L.marker([b.lat, b.lon], {
-        icon: L.divIcon({ className: "busmark", html: `${leg.route}`, iconSize: null }),
-      }).bindTooltip(`${esc(leg.route)} · ${esc(b.vehicle || "bus")}<br>arrives in ${minutesText(b.eta_min)}`).addTo(busLayer);
-      pos.push([b.lat, b.lon]);
+      items.push({ key: `${leg.route}|${b.vehicle || b.lat}`, lat: b.lat, lon: b.lon, label: leg.route,
+        tip: `${esc(leg.route)} · ${esc(b.vehicle || "bus")}<br>arrives in ${minutesText(b.eta_min)}` });
     }
   }
-  return pos;
+  busMgr.sync(items);
+  return items.map((it) => [it.lat, it.lon]);
 }
 
 function drawOption(opt) {
@@ -515,15 +557,16 @@ async function loadBoard(fly) {
   try {
     const d = await (await fetch("/live/stop?stop_id=" + boardStop.stop_id)).json();
     box.replaceChildren();
-    busLayer.clearLayers();
+    if (fly) busMgr.clear();
+    const busItems = [];
     drawLayer.clearLayers();
     L.circleMarker([d.stop.lat, d.stop.lon], { radius: 8, color: "#fff", weight: 2, fillColor: "#12654a", fillOpacity: 1 })
       .bindTooltip(d.stop.name).addTo(drawLayer);
     if (fly) map.setView([d.stop.lat, d.stop.lon], 15);
     box.append(h("div", { class: "route", style: "font-weight:600" }, d.stop.name),
       h("div", { class: "meta hint", style: "margin:0 0 6px" }, `${d.stop.routes} routes serve this stop`));
-    if (!d.live) { box.append(h("div", { class: "msg" }, "Live data is not running, so arrivals cannot be shown.")); return; }
-    if (!d.buses.length) { box.append(h("div", { class: "msg" }, "No buses heading to this stop right now.")); return; }
+    if (!d.live) { busMgr.clear(); box.append(h("div", { class: "msg" }, "Live data is not running, so arrivals cannot be shown.")); return; }
+    if (!d.buses.length) { busMgr.clear(); box.append(h("div", { class: "msg" }, "No buses heading to this stop right now.")); return; }
     for (const b of d.buses) {
       box.append(h("div", { class: "board-row" },
         routeBadge(b.route),
@@ -531,9 +574,10 @@ async function loadBoard(fly) {
           b.vehicle ? h("div", { class: "meta" }, "Bus ", h("span", { class: "veh" }, b.vehicle), b.eta_source === "model" ? " · AI ETA" : " · history ETA") : null,
           h("div", { class: "meta" }, `${b.stops_away} stop${b.stops_away === 1 ? "" : "s"} away · ${b.remaining_m} m${b.standing ? " · standing" : ""} · seen ${b.ping_age_s}s ago`)),
         h("div", { class: "eta num" }, b.eta_min < 0.5 ? "now" : String(Math.round(b.eta_min)), b.eta_min < 0.5 ? null : h("small", {}, " min"))));
-      L.marker([b.lat, b.lon], { icon: L.divIcon({ className: "busmark", html: b.route, iconSize: null }) })
-        .bindTooltip(`${esc(b.route)} · ${esc(b.vehicle || "bus")}<br>${minutesText(b.eta_min)}`).addTo(busLayer);
+      busItems.push({ key: `${b.route}|${b.vehicle || b.lat}`, lat: b.lat, lon: b.lon, label: b.route,
+        tip: `${esc(b.route)} · ${esc(b.vehicle || "bus")}<br>${minutesText(b.eta_min)}` });
     }
+    busMgr.sync(busItems);
   } catch (e) {
     box.replaceChildren(h("div", { class: "msg err" }, "Could not load live buses."));
   }
@@ -548,7 +592,7 @@ function showTab(name) {
   clearInterval(boardTimer);
   clearInterval(planTimer);
   drawLayer.clearLayers();
-  busLayer.clearLayers();
+  busMgr.clear();
   if (name === "board") {
     setPick(null);
     boardTimer = setInterval(() => loadBoard(false), 15000);
