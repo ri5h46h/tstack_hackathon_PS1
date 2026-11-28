@@ -304,6 +304,18 @@ They use a tiny made-up network and need no GTFS files, data or keys.
 
 ---
 
+## Screenshots
+- **Journey Planner**
+
+![Screenshot](sample_screenshots/screenshot1.png)
+
+- **Stop Board**
+
+![Screenshot](sample_screenshots/screenshot2.png)
+
+
+---
+
 ## Known limits
 
 - Travel times come only from our collected days, so rarely served stop pairs fall back to speed estimates (shown as lower confidence).
