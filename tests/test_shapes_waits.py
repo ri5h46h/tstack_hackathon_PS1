@@ -83,6 +83,22 @@ def test_quiet_hour():
         assert morning["slower_than_quiet_min"] == 0 and morning["quiet_hour_min"] <= morning["total_min"]
 
 
+def test_unresolved_buses():
+    with tempfile.TemporaryDirectory() as tmp:
+        p, m = TL.build(Path(tmp))
+        NOW = TL.NOW
+        mk = lambda vid, rid: {"vehicle_id": vid, "name": vid, "route_id": rid, "trip_id": "t", "lat": T.LAT,  # noqa: E731
+                               "lon": TL.lon_at(300), "ts": int(NOW - 5), "speed_rep": None}
+        m.update([mk("A", 10), mk("B", 99999), mk("C", 99999), mk("D", None), mk("E", 88888)], NOW)
+        st = m.status(NOW)
+        print("unresolved:", st["unresolved_buses"], st["unresolved_top_routes"])
+        assert st["unresolved_buses"] == 4 and st["unresolved_routes"] == 3 and st["buses_tracked"] == 1
+        assert st["buses_live"] == 5, st["buses_live"]      # every live bus counts, resolved or not
+        assert st["unresolved_top_routes"][0] == {"route_id": 99999, "buses": 2}
+        m.update([mk("A", 10)], NOW + 15)                  # next snapshot: all resolved again
+        assert m.status(NOW + 15)["unresolved_buses"] == 0
+
+
 def test_features_parity():
     ok = F.interval_ok([30, 5, 30], [500, 500, 100], [700, 520, 700], [5000, 5000, 5000])
     assert ok.tolist() == [True, False, False]
@@ -91,7 +107,7 @@ def test_features_parity():
 
 
 if __name__ == "__main__":
-    for fn in (test_shapes, test_wait_names_and_model, test_quiet_hour, test_features_parity):
+    for fn in (test_shapes, test_wait_names_and_model, test_quiet_hour, test_unresolved_buses, test_features_parity):
         print("---", fn.__name__)
         fn()
     print("PASS")

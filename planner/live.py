@@ -87,7 +87,7 @@ def decode_vehicle_positions(content, source, now=None):
         try:
             rid = int(rid)
         except (TypeError, ValueError):
-            continue
+            rid = None                       # no usable route id: counted as an unresolved bus
         rows.append({
             "vehicle_id": str(vid), "name": str(plate or vid), "label": str(label),
             "route_id": rid, "trip_id": v.trip.trip_id,
@@ -253,6 +253,8 @@ class LiveModel:
         self.updates = 0
         self.last_update = 0.0
         self.counts = defaultdict(int)
+        self.live_total = 0                      # every bus in the latest snapshot, resolved or not
+        self.unresolved = {}                     # vehicle id -> route id, buses of the latest snapshot
         self._fcache = (0.0, None)
         self.eta_model = None
         self.eta_info = {"loaded": False, "reason": "no model file"}
@@ -318,10 +320,15 @@ class LiveModel:
     def update(self, rows, now=None, source=None):
         now = now or time.time()
         with self.lock:
+            unresolved = {}
             for row in rows:
-                r = self.net.route_index(row["route_id"])
-                if r is None or len(self.net.patterns[r]) < 2:
+                r = self.net.route_index(row["route_id"]) if row["route_id"] is not None else None
+                if r is None:
+                    unresolved[row["vehicle_id"]] = row["route_id"]   # route id missing from the static GTFS
                     self.counts["unknown_route"] += 1
+                    continue
+                if len(self.net.patterns[r]) < 2:
+                    self.counts["route_without_stops"] += 1
                     continue
                 x, y = self.net.xy(row["lat"], row["lon"])
                 g = self.geom(r)
@@ -362,6 +369,8 @@ class LiveModel:
             for dq in self.route_bins.values():
                 while dq and dq[0][0] < lim:
                     dq.popleft()
+            self.unresolved = unresolved
+            self.live_total = len({row["vehicle_id"] for row in rows})
             self.updates += 1
             self.last_update = now
 
@@ -528,7 +537,15 @@ class LiveModel:
         f = self.factors(now)
         with self.lock:
             n_buses = sum(len(d) for d in self.buses.values())
+            unres = dict(self.unresolved)
+        by_route = defaultdict(int)
+        for rid in unres.values():
+            by_route[rid] += 1
         return {
+            "buses_live": max(self.live_total, n_buses + len(unres)),
+            "unresolved_buses": len(unres), "unresolved_routes": len(by_route),
+            "unresolved_top_routes": [{"route_id": r, "buses": n} for r, n in
+                                      sorted(by_route.items(), key=lambda x: -x[1])[:5]],
             "buses_tracked": n_buses, "routes_tracked": len(self.buses),
             "warm": f["warm"], "network_factor": round(f["net"], 3), "events_10min": f["n_events"],
             "expected_bus_seconds_10min": f["expected_s"], "updates": self.updates,

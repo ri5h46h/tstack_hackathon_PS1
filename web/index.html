@@ -35,6 +35,9 @@
   header h1 span { font-weight: 400; color: var(--muted); margin-left: 8px; font-size: 13px; }
   #livepill { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   #livepill i { width: 8px; height: 8px; border-radius: 50%; background: #aaa; display: inline-block; }
+  #livepill .unres { color: #8a5a00; cursor: help; border-bottom: 1px dotted #b8872a; }
+  #livepill .unres small { font-size: 11.5px; }
+  @media (max-width: 760px) { #livepill .unres small { display: none; } }
   #livepill.on i { background: var(--green); }
   #livepill.warm i { background: var(--amber); }
 
@@ -144,7 +147,7 @@
 <body>
 <header>
   <h1>Delhi bus planner <span>times learned from real bus data</span></h1>
-  <div id="livepill"><i></i><span>checking live feed</span></div>
+  <div id="livepill"><i></i><span>checking live feed</span><span class="unres" id="unres" hidden></span></div>
 </header>
 
 <main>
@@ -611,17 +614,25 @@ async function refreshLive() {
   try {
     const s = await (await fetch("/live/status")).json();
     LIVE_ON = !!s.enabled;
-    if (!s.enabled) { pill.className = ""; $("span", pill).textContent = "live feed off"; return; }
+    if (!s.enabled) { pill.className = ""; $("span", pill).textContent = "live feed off"; $("#unres").hidden = true; return; }
     const m = s.model, f = s.feed;
+    const un = $("#unres");
+    if (m.unresolved_buses > 0) {
+      const top = (m.unresolved_top_routes || []).map((t) => `${t.route_id} (${t.buses})`).join(", ");
+      un.hidden = false;
+      un.replaceChildren(`· ${m.unresolved_buses.toLocaleString()} of them unresolved `, h("small", {}, "(authorities, please update the static GTFS!)"));
+      un.title = `${m.unresolved_buses} live buses (${m.unresolved_routes} route ids) are sending a route id that is missing from the static GTFS, so they cannot be placed on any route and are left out of the planner. ` +
+        `Dear authorities: a fresh GTFS would make these buses useful again.` + (top ? ` Most common unknown route ids: ${top}.` : "");
+    } else { un.hidden = true; }
     if (f.age_s === null) { pill.className = "warm"; $("span", pill).textContent = "waiting for first live data"; return; }
     if (m.warm) {
       pill.className = "on";
-      $("span", pill).textContent = `live · ${m.buses_tracked.toLocaleString()} buses · traffic x${m.network_factor}${m.eta_model && m.eta_model.loaded ? " · AI ETA" : ""}`;
+      $("span", pill).textContent = `live · ${(m.buses_live ?? m.buses_tracked).toLocaleString()} buses · traffic x${m.network_factor}${m.eta_model && m.eta_model.loaded ? " · AI ETA" : ""}`;
     } else {
       pill.className = "warm";
-      $("span", pill).textContent = `live · ${m.buses_tracked.toLocaleString()} buses · learning current traffic`;
+      $("span", pill).textContent = `live · ${(m.buses_live ?? m.buses_tracked).toLocaleString()} buses · learning current traffic`;
     }
-  } catch (e) { pill.className = ""; $("span", pill).textContent = "server not reachable"; }
+  } catch (e) { pill.className = ""; $("span", pill).textContent = "server not reachable"; $("#unres").hidden = true; }
 }
 refreshLive();
 setInterval(refreshLive, 20000);
