@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 
+from planner.area import AREA, inside  # noqa: E402
 from planner.live import LiveFeed, LiveModel, load_env  # noqa: E402
 from planner.search import Planner  # noqa: E402
 
@@ -75,8 +76,9 @@ def parse_place(text, name):
         raise
     except Exception:
         raise HTTPException(400, f"{name} must be 'lat,lon' (e.g. 28.61,77.21) or 'stop:<stop_id>'")
-    if not (28.0 <= lat <= 29.2 and 76.5 <= lon <= 77.8):
-        raise HTTPException(400, f"{name} is outside the Delhi area covered by the data")
+    if not inside(lat, lon):
+        raise HTTPException(400, f"{name} is outside the area covered (Delhi and the region around it, "
+                                 f"including DTC's inter-state routes)")
     return lat, lon
 
 
@@ -121,8 +123,8 @@ def live_stop(stop_id: int, max_buses: int = Query(8, ge=1, le=20), route_id: Op
 
 
 @app.get("/plan")
-def plan(from_lat: float = Query(..., ge=28.0, le=29.2), from_lon: float = Query(..., ge=76.5, le=77.8),
-         to_lat: float = Query(..., ge=28.0, le=29.2), to_lon: float = Query(..., ge=76.5, le=77.8),
+def plan(from_lat: float = Query(..., ge=AREA[0], le=AREA[1]), from_lon: float = Query(..., ge=AREA[2], le=AREA[3]),
+         to_lat: float = Query(..., ge=AREA[0], le=AREA[1]), to_lon: float = Query(..., ge=AREA[2], le=AREA[3]),
          depart: str = Query("now", description="HH:MM in IST, or 'now'"),
          max_transfers: int = Query(2, ge=0, le=3),
          live: bool = Query(True, description="use live traffic and show approaching buses (only for 'now')"),

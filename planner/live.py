@@ -34,7 +34,7 @@ from planner import features as F
 TSTACK_URL = "https://dts-backend.transportstack.in/api/dataset/otd/get-file"
 TSTACK_PARAMS = {"agency": "delhi-buses", "category": "realtime_gtfs", "filename": "VehiclePositions.pb"}
 OTD_URL = "https://otd.delhi.gov.in/api/realtime/VehiclePositions.pb"
-BBOX = (28.20, 29.10, 76.60, 77.70)     # lat min, lat max, lon min, lon max
+from planner.area import AREA as BBOX   # lat min, lat max, lon min, lon max (wide: inter-state routes)
 
 MAX_PING_AGE_S = 600       # drop pings older than this
 FUTURE_SLACK_S = 120

@@ -506,7 +506,7 @@ $("#go").onclick = async () => {
     const r = await fetch("/plan?" + q);
     if (!r.ok) {
       let msg = "Something went wrong.";
-      try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : "Check that both points are inside Delhi."; } catch (e) { /* keep default */ }
+      try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : "Check that both points are in Delhi or the region around it."; } catch (e) { /* keep default */ }
       box.replaceChildren(h("div", { class: "msg err" }, msg));
       return;
     }
